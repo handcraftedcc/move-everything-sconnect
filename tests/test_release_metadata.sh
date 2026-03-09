@@ -4,6 +4,7 @@ set -euo pipefail
 release_json="release.json"
 module_json="src/module.json"
 workflow_file=".github/workflows/release.yml"
+dockerfile="scripts/Dockerfile"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "FAIL: jq is required to run this test" >&2
@@ -22,6 +23,11 @@ fi
 
 if [ ! -f "$workflow_file" ]; then
   echo "FAIL: Missing $workflow_file" >&2
+  exit 1
+fi
+
+if [ ! -f "$dockerfile" ]; then
+  echo "FAIL: Missing $dockerfile" >&2
   exit 1
 fi
 
@@ -70,6 +76,11 @@ fi
 
 if ! rg -q "softprops/action-gh-release@" "$workflow_file"; then
   echo "FAIL: release workflow missing GitHub release publish step" >&2
+  exit 1
+fi
+
+if ! rg -q '^[[:space:]]*gcc[[:space:]]*\\?$' "$dockerfile"; then
+  echo "FAIL: build Dockerfile must install host gcc for Rust build scripts" >&2
   exit 1
 fi
 
