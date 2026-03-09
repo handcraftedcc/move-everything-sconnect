@@ -24,7 +24,7 @@ This project is an unofficial community module and is not affiliated with, endor
 
 - Spotify Connect playback through the Move signal chain
 - Built on `librespot` as the Spotify Connect receiver backend
-- Device name shown in Spotify as `Move - Slot N` (or your custom name)
+- Device name shown in Spotify defaults to `Move Everything` (or your custom name)
 - Track metadata display in module UI:
   - `Track`
   - `Artist`

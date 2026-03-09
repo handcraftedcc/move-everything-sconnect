@@ -11,7 +11,7 @@ const SPINNER = ['-', '/', '|', '\\'];
 const TRANSPORT_CONTROLS_VISIBLE = false;
 
 let status = 'stopped';
-let deviceName = 'Move';
+let deviceName = 'Move Everything';
 let controlsEnabled = false;
 let trackName = '';
 let trackArtist = '';
@@ -36,7 +36,7 @@ function refreshState() {
   const prevPlaybackEvent = playbackEvent;
 
   status = host_module_get_param('status') || 'stopped';
-  deviceName = host_module_get_param('device_name') || 'Move';
+  deviceName = host_module_get_param('device_name') || 'Move Everything';
   controlsEnabled = host_module_get_param('controls_enabled') === '1';
   trackName = host_module_get_param('track_name') || '';
   trackArtist = host_module_get_param('track_artist') || '';
@@ -164,7 +164,7 @@ function currentFooter() {
 
 globalThis.init = function () {
   status = 'stopped';
-  deviceName = 'Move';
+  deviceName = 'Move Everything';
   controlsEnabled = false;
   trackName = '';
   trackArtist = '';

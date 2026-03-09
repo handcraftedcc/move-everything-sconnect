@@ -943,7 +943,7 @@ static void* v2_create_instance(const char *module_dir, const char *json_default
     snprintf(inst->module_dir, sizeof(inst->module_dir), "%s",
              module_dir ? module_dir : ".");
     snprintf(inst->device_name, sizeof(inst->device_name),
-             "Move - Slot %d", inst->slot);
+             "Move Everything");
     snprintf(inst->cache_dir, sizeof(inst->cache_dir), "%s", CACHE_DIR_DEFAULT);
 
     inst->gain = 1.0f;
@@ -1120,7 +1120,7 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
 
     if (strcmp(key, "device_name") == 0) {
         return snprintf(buf, (size_t)buf_len, "%s",
-                        inst ? inst->device_name : "Move");
+                        inst ? inst->device_name : "Move Everything");
     }
 
     if (strcmp(key, "backend_pid") == 0) {
