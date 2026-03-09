@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Build outputs
+build/
+dist/
+
+# Runtime logs/cache artifacts
+*.log
+cache/
+
+# Tooling
+.worktrees/
+worktrees/

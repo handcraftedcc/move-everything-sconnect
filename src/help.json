@@ -1,0 +1,74 @@
+{
+  "title": "SConnect",
+  "children": [
+    {
+      "title": "Overview",
+      "lines": [
+        "Spotify Connect",
+        "receiver for Move.",
+        "",
+        "Pick SConnect",
+        "as output device",
+        "from Spotify app.",
+        "",
+        "UI shows state,",
+        "track, artist,",
+        "and quality."
+      ]
+    },
+    {
+      "title": "Setup",
+      "lines": [
+        "1. Build:",
+        "   ./scripts/build.sh",
+        "",
+        "2. Install:",
+        "   ./scripts/install.sh",
+        "",
+        "3. Load SConnect",
+        "   in a slot",
+        "",
+        "4. In Spotify app,",
+        "   choose Move",
+        "   receiver and",
+        "   press play."
+      ]
+    },
+    {
+      "title": "Buttons",
+      "lines": [
+        "Reset Auth:",
+        "clears auth/cache",
+        "then restarts.",
+        "",
+        "Use Reset Auth",
+        "if connect/auth",
+        "state is stuck."
+      ]
+    },
+    {
+      "title": "Quality",
+      "lines": [
+        "96 / 160 / 320",
+        "kbps selector.",
+        "",
+        "Changing quality",
+        "restarts backend.",
+        "",
+        "If stuttering,",
+        "try 160 or 96.",
+        "",
+        "Choice is saved",
+        "and restored."
+      ]
+    },
+    {
+      "title": "Notes",
+      "lines": [
+        "Use Spotify app",
+        "for play/pause",
+        "next/previous."
+      ]
+    }
+  ]
+}
