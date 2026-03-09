@@ -23,7 +23,19 @@ module_id=$(jq -r '.id' "$module_json")
 module_name=$(jq -r '.name' "$module_json")
 version=$(jq -r '.version' "$release_json")
 url=$(jq -r '.download_url' "$release_json")
-expected_url="https://github.com/charlesvestal/move-anything-sconnect/releases/download/v${version}/sconnect-module.tar.gz"
+repo_slug="${GITHUB_REPOSITORY:-}"
+if [ -z "$repo_slug" ]; then
+  origin_url="$(git remote get-url origin 2>/dev/null || true)"
+  repo_slug="$(printf '%s\n' "$origin_url" \
+    | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')"
+fi
+
+if [ -z "$repo_slug" ]; then
+  echo "FAIL: unable to determine GitHub repository slug for release URL check" >&2
+  exit 1
+fi
+
+expected_url="https://github.com/${repo_slug}/releases/download/v${version}/sconnect-module.tar.gz"
 
 if [ "$module_id" != "sconnect" ]; then
   echo "FAIL: expected module id sconnect, got $module_id" >&2

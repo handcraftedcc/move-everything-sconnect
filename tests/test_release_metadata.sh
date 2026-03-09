@@ -27,7 +27,20 @@ fi
 
 version=$(jq -r '.version' "$release_json")
 module_version=$(jq -r '.version' "$module_json")
-expected_url="https://github.com/charlesvestal/move-anything-sconnect/releases/download/v${version}/sconnect-module.tar.gz"
+
+repo_slug="${GITHUB_REPOSITORY:-}"
+if [ -z "$repo_slug" ]; then
+  origin_url="$(git remote get-url origin 2>/dev/null || true)"
+  repo_slug="$(printf '%s\n' "$origin_url" \
+    | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')"
+fi
+
+if [ -z "$repo_slug" ]; then
+  echo "FAIL: unable to determine GitHub repository slug for release URL check" >&2
+  exit 1
+fi
+
+expected_url="https://github.com/${repo_slug}/releases/download/v${version}/sconnect-module.tar.gz"
 url=$(jq -r '.download_url' "$release_json")
 
 if [ -z "$version" ] || [ "$version" = "null" ]; then
@@ -50,5 +63,15 @@ if ! rg -q "Verify release\.json metadata" "$workflow_file"; then
   exit 1
 fi
 
-echo "PASS: release metadata is present and release workflow validates it"
+if ! rg -q "Build module" "$workflow_file"; then
+  echo "FAIL: release workflow missing module build step" >&2
+  exit 1
+fi
+
+if ! rg -q "softprops/action-gh-release@" "$workflow_file"; then
+  echo "FAIL: release workflow missing GitHub release publish step" >&2
+  exit 1
+fi
+
+echo "PASS: release metadata is present and release workflow builds and publishes artifacts"
 exit 0
