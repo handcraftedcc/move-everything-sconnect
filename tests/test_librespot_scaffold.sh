@@ -27,6 +27,11 @@ if ! rg -q 'cargo build --release --target "\$TARGET"' "$build_librespot"; then
   exit 1
 fi
 
+if ! rg -q 'PKG_CONFIG_ALLOW_CROSS' "$build_librespot"; then
+  echo "FAIL: build_librespot.sh must enable cross pkg-config for arm64 OpenSSL resolution" >&2
+  exit 1
+fi
+
 if ! rg -q 'dist/sconnect/bin/librespot' "$build_librespot"; then
   echo "FAIL: build_librespot.sh must stage binary at dist/sconnect/bin/librespot" >&2
   exit 1

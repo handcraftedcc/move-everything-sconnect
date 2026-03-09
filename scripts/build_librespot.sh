@@ -43,6 +43,9 @@ git checkout "$LIBRESPOT_VERSION"
 
 if [ "$TARGET" = "aarch64-unknown-linux-gnu" ]; then
   export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="${CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER:-${CROSS_PREFIX:-aarch64-linux-gnu-}gcc}"
+  export PKG_CONFIG_ALLOW_CROSS="${PKG_CONFIG_ALLOW_CROSS:-1}"
+  export PKG_CONFIG_LIBDIR="${PKG_CONFIG_LIBDIR:-/usr/lib/aarch64-linux-gnu/pkgconfig}"
+  export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-$PKG_CONFIG_LIBDIR}"
 fi
 
 rustup target add "$TARGET" >/dev/null
