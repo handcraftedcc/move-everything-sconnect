@@ -102,7 +102,7 @@ Use `Reset Auth` when device visibility/auth state gets stuck or after account/d
 - You are responsible for using this module in compliance with Spotify terms and applicable copyright law.
 - If you distribute modified versions, keep these restrictions visible in your docs/UI.
 
-## librespot Disclaimer (Verbatim)
+## Librespot Disclaimer
 
 Using this code to connect to Spotify's API is probably forbidden by them.
 Use at your own risk.
