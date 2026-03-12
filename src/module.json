@@ -2,7 +2,7 @@
   "id": "sconnect",
   "name": "SConnect",
   "abbrev": "SC",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Unofficial Spotify Connect receiver for personal listening on Move",
   "author": "dom",
   "license": "MIT",
