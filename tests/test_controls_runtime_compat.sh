@@ -43,14 +43,14 @@ if ! rg -q '#define RING_SECONDS        3' "$plugin_file"; then
   exit 1
 fi
 
-if ! rg -q 'strcmp\(inst->playback_event, "paused"\) == 0' "$plugin_file"; then
-  echo "FAIL: paused event handling must be present" >&2
+if ! rg -q 'strcmp\(inst->playback_event, "stopped"\) == 0' "$plugin_file"; then
+  echo "FAIL: stopped event handling must be present" >&2
   exit 1
 fi
 
 if ! rg -q 'clear_ring\(inst\);' "$plugin_file"; then
-  echo "FAIL: ring must be flushed on pause/stopped events" >&2
+  echo "FAIL: ring must be flushed on stopped events" >&2
   exit 1
 fi
 
-echo "PASS: controls runtime compatibility and pause-latency safeguards are present"
+echo "PASS: controls runtime compatibility and transition-safe ring flush are present"

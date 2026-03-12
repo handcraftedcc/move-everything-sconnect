@@ -337,8 +337,7 @@ static void supervisor_poll_nowplaying_state(sconnect_instance_t *inst) {
     fclose(fp);
 
     if (event_changed &&
-        (strcmp(inst->playback_event, "paused") == 0 ||
-         strcmp(inst->playback_event, "stopped") == 0)) {
+        strcmp(inst->playback_event, "stopped") == 0) {
         clear_ring(inst);
         inst->receiving_audio = false;
         if (inst->daemon_running && strcmp(inst->supervisor_state, "error") != 0) {
@@ -603,7 +602,6 @@ static int supervisor_start(sconnect_instance_t *inst) {
                   "--cache", inst->cache_dir,
                   "--bitrate", bitrate_str,
                   "--onevent", event_hook_path,
-                  "-v",
                   (char *)NULL);
         } else {
             execl(librespot_path, "librespot",
@@ -612,7 +610,6 @@ static int supervisor_start(sconnect_instance_t *inst) {
                   "--device", inst->fifo_path,
                   "--cache", inst->cache_dir,
                   "--bitrate", bitrate_str,
-                  "-v",
                   (char *)NULL);
         }
         _exit(127);
