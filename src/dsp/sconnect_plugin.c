@@ -29,6 +29,7 @@
 #define STATE_POLL_INTERVAL_MS 250
 #define CONTROL_MIN_INTERVAL_MS 900
 #define CONTROL_429_BACKOFF_MS 10000
+#define SESSION_RECOVERY_COOLDOWN_MS 15000
 #define TOKEN_MAX           2048
 #define TRACK_TEXT_MAX      256
 
@@ -72,11 +73,14 @@ typedef struct {
     uint64_t log_offset;
     uint64_t last_log_poll_ms;
     uint64_t last_state_poll_ms;
+    uint64_t last_session_recover_ms;
+    bool pending_session_recover;
     char log_line_buf[8192];
     size_t log_line_len;
 } sconnect_instance_t;
 
 static void clear_ring(sconnect_instance_t *inst);
+static int supervisor_restart(sconnect_instance_t *inst);
 
 static void append_log(const char *msg) {
     FILE *fp;
@@ -349,6 +353,17 @@ static void supervisor_process_log_line(sconnect_instance_t *inst, const char *l
     supervisor_parse_token_line(inst, line);
     supervisor_parse_device_id_line(inst, line);
 
+    if (strstr(line, "SESSION_DELETED") || strstr(line, "DEVICES_DISAPPEARED")) {
+        bool had_recent_playback =
+            inst->receiving_audio ||
+            strcmp(inst->supervisor_state, "playing") == 0 ||
+            strcmp(inst->playback_event, "playing") == 0;
+        if (inst->daemon_running && had_recent_playback) {
+            inst->pending_session_recover = true;
+            ap_log("spotify session invalidated; scheduling reconnect");
+        }
+    }
+
     if (strstr(line, "Authenticated") || strstr(line, "Login successful") ||
         strstr(line, "Using cached credentials")) {
         if (strcmp(inst->supervisor_state, "playing") != 0) {
@@ -380,6 +395,27 @@ static void supervisor_process_log_line(sconnect_instance_t *inst, const char *l
         strstr(line, "Invalid username/password")) {
         set_error(inst, "spotify authentication failed");
     }
+}
+
+static void maybe_recover_session(sconnect_instance_t *inst) {
+    uint64_t now;
+    if (!inst || !inst->pending_session_recover) return;
+    if (!inst->daemon_running) {
+        inst->pending_session_recover = false;
+        return;
+    }
+
+    now = now_ms();
+    if (inst->last_session_recover_ms > 0 &&
+        now > inst->last_session_recover_ms &&
+        (now - inst->last_session_recover_ms) < SESSION_RECOVERY_COOLDOWN_MS) {
+        return;
+    }
+
+    inst->pending_session_recover = false;
+    inst->last_session_recover_ms = now;
+    ap_log("attempting reconnect after spotify session invalidation");
+    (void)supervisor_restart(inst);
 }
 
 static void supervisor_poll_runtime_log(sconnect_instance_t *inst) {
@@ -602,6 +638,7 @@ static int supervisor_start(sconnect_instance_t *inst) {
 
 static int supervisor_restart(sconnect_instance_t *inst) {
     if (!inst) return -1;
+    inst->pending_session_recover = false;
     clear_ring(inst);
     clear_error(inst);
     inst->receiving_audio = false;
@@ -646,6 +683,7 @@ static void supervisor_clear_credentials(sconnect_instance_t *inst) {
     inst->playback_event[0] = '\0';
     inst->last_control_request_ms = 0;
     inst->control_backoff_until_ms = 0;
+    inst->pending_session_recover = false;
     set_controls_enabled(inst, false);
     set_supervisor_state(inst, "waiting_for_spotify");
 
@@ -960,6 +998,8 @@ static void* v2_create_instance(const char *module_dir, const char *json_default
     inst->playback_event[0] = '\0';
     inst->last_control_request_ms = 0;
     inst->control_backoff_until_ms = 0;
+    inst->last_session_recover_ms = 0;
+    inst->pending_session_recover = false;
     set_supervisor_state(inst, "uninitialized");
 
     (void)json_defaults;
@@ -1205,6 +1245,7 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
 
     check_daemon_alive(inst);
     supervisor_poll_runtime_log(inst);
+    maybe_recover_session(inst);
     supervisor_poll_nowplaying_state(inst);
     pump_pipe(inst);
 

@@ -117,6 +117,11 @@ Use at your own risk.
 - `src/runtime/sconnect_event.sh`: now-playing metadata hook
 - `tests/`: scaffold/runtime/compat/metadata test scripts
 
+## Maintainer Notes
+
+- Tag-based release recipe for other modules:
+  - `docs/TAG_RELEASE_RECIPE.md`
+
 ## License
 
 MIT
