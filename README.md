@@ -1,4 +1,4 @@
-# Move Everything - SConnect (Spotify Connect Receiver)
+# Move Everything - SConnect
 
 SConnect is a Spotify Connect receiver module for [Move Everything](https://github.com/charlesvestal/move-anything) on Ableton Move.
 It is built on `librespot`.
