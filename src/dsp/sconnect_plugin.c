@@ -25,11 +25,18 @@
 #define NOWPLAYING_PATH     "/data/UserData/move-anything/cache/sconnect-nowplaying.env"
 #define CONTROL_AUTH_PATH   "/data/UserData/move-anything/cache/sconnect-control-auth.env"
 #define QUALITY_PREF_PATH   "/data/UserData/move-anything/cache/sconnect-quality.env"
-#define LOG_POLL_INTERVAL_MS 250
-#define STATE_POLL_INTERVAL_MS 250
+#define LOG_POLL_INTERVAL_MS 1000
+#define STATE_POLL_INTERVAL_MS 500
 #define CONTROL_MIN_INTERVAL_MS 900
 #define CONTROL_429_BACKOFF_MS 10000
 #define SESSION_RECOVERY_COOLDOWN_MS 15000
+#define PAUSE_FLUSH_DELAY_MS 450
+#define RENDER_GAP_WARN_MS 12
+#define RENDER_MAINTENANCE_INTERVAL_MS 50
+#define TRANSITION_PREBUFFER_MS 70
+#define TRANSITION_PREBUFFER_SAMPLES ((MOVE_SAMPLE_RATE * 2 * TRANSITION_PREBUFFER_MS) / 1000)
+#define TRANSITION_PREBUFFER_MAX_WAIT_MS 400
+#define ENABLE_TELEMETRY_LOGS 0
 #define TOKEN_MAX           2048
 #define TRACK_TEXT_MAX      256
 
@@ -64,6 +71,16 @@ typedef struct {
     uint64_t play_abs;
     uint8_t pending_bytes[4];
     uint8_t pending_len;
+    int16_t last_out_l;
+    int16_t last_out_r;
+    uint64_t underrun_count;
+    uint64_t last_underrun_log_ms;
+    uint64_t overrun_count;
+    uint64_t last_overrun_log_ms;
+    uint64_t render_gap_count;
+    uint64_t last_render_ms;
+    uint64_t last_render_gap_log_ms;
+    uint64_t last_maintenance_ms;
 
     float gain;
     bool receiving_audio;
@@ -75,12 +92,17 @@ typedef struct {
     uint64_t last_state_poll_ms;
     uint64_t last_session_recover_ms;
     bool pending_session_recover;
+    uint64_t paused_since_ms;
+    bool pending_pause_flush;
+    uint64_t transition_prebuffer_started_ms;
+    bool pending_transition_prebuffer;
     char log_line_buf[8192];
     size_t log_line_len;
 } sconnect_instance_t;
 
 static void clear_ring(sconnect_instance_t *inst);
 static int supervisor_restart(sconnect_instance_t *inst);
+static size_t ring_available(const sconnect_instance_t *inst);
 
 static void append_log(const char *msg) {
     FILE *fp;
@@ -336,8 +358,35 @@ static void supervisor_poll_nowplaying_state(sconnect_instance_t *inst) {
 
     fclose(fp);
 
-    if (event_changed &&
-        strcmp(inst->playback_event, "stopped") == 0) {
+    if (!event_changed) return;
+
+    if (strcmp(inst->playback_event, "paused") == 0) {
+        inst->paused_since_ms = now;
+        inst->pending_pause_flush = true;
+        inst->pending_transition_prebuffer = false;
+        inst->transition_prebuffer_started_ms = 0;
+        return;
+    }
+
+    inst->paused_since_ms = 0;
+    inst->pending_pause_flush = false;
+
+    if (strcmp(inst->playback_event, "track_changed") == 0) {
+        inst->pending_transition_prebuffer = true;
+        inst->transition_prebuffer_started_ms = now;
+        return;
+    }
+
+    if (strcmp(inst->playback_event, "playing") == 0) {
+        /* Keep transition prebuffer active across event progression until
+         * enough audio has accumulated or timeout is reached. */
+        return;
+    }
+
+    inst->pending_transition_prebuffer = false;
+    inst->transition_prebuffer_started_ms = 0;
+
+    if (strcmp(inst->playback_event, "stopped") == 0) {
         clear_ring(inst);
         inst->receiving_audio = false;
         if (inst->daemon_running && strcmp(inst->supervisor_state, "error") != 0) {
@@ -417,6 +466,58 @@ static void maybe_recover_session(sconnect_instance_t *inst) {
     (void)supervisor_restart(inst);
 }
 
+static void maybe_flush_paused(sconnect_instance_t *inst) {
+    uint64_t now;
+
+    if (!inst || !inst->pending_pause_flush) return;
+    if (strcmp(inst->playback_event, "paused") != 0) {
+        inst->pending_pause_flush = false;
+        inst->paused_since_ms = 0;
+        return;
+    }
+
+    now = now_ms();
+    if (inst->paused_since_ms > 0 &&
+        now > inst->paused_since_ms &&
+        (now - inst->paused_since_ms) < PAUSE_FLUSH_DELAY_MS) {
+        return;
+    }
+
+    clear_ring(inst);
+    inst->receiving_audio = false;
+    inst->pending_pause_flush = false;
+    inst->paused_since_ms = 0;
+
+    if (inst->daemon_running && strcmp(inst->supervisor_state, "error") != 0) {
+        set_supervisor_state(inst, "ready");
+    }
+}
+
+static bool maybe_release_transition_prebuffer(sconnect_instance_t *inst) {
+    uint64_t now;
+    size_t avail;
+
+    if (!inst || !inst->pending_transition_prebuffer) return true;
+
+    avail = ring_available(inst);
+    if (avail >= (size_t)TRANSITION_PREBUFFER_SAMPLES) {
+        inst->pending_transition_prebuffer = false;
+        inst->transition_prebuffer_started_ms = 0;
+        return true;
+    }
+
+    now = now_ms();
+    if (inst->transition_prebuffer_started_ms > 0 &&
+        now > inst->transition_prebuffer_started_ms &&
+        (now - inst->transition_prebuffer_started_ms) >= TRANSITION_PREBUFFER_MAX_WAIT_MS) {
+        inst->pending_transition_prebuffer = false;
+        inst->transition_prebuffer_started_ms = 0;
+        return true;
+    }
+
+    return false;
+}
+
 static void supervisor_poll_runtime_log(sconnect_instance_t *inst) {
     uint8_t buf[256];
     uint64_t now;
@@ -475,6 +576,9 @@ static size_t ring_available(const sconnect_instance_t *inst) {
 }
 
 static void ring_push(sconnect_instance_t *inst, const int16_t *samples, size_t n) {
+    char log_msg[192];
+    uint64_t dropped = 0;
+    uint64_t now = 0;
     size_t i;
     uint64_t oldest;
     for (i = 0; i < n; i++) {
@@ -488,7 +592,26 @@ static void ring_push(sconnect_instance_t *inst, const int16_t *samples, size_t 
         oldest = inst->write_abs - (uint64_t)RING_SAMPLES;
     }
     if (inst->play_abs < oldest) {
+        dropped = oldest - inst->play_abs;
         inst->play_abs = oldest;
+        inst->overrun_count++;
+#if ENABLE_TELEMETRY_LOGS
+        now = now_ms();
+        if (inst->last_overrun_log_ms == 0 ||
+            (now > inst->last_overrun_log_ms &&
+             (now - inst->last_overrun_log_ms) >= 2000)) {
+            snprintf(log_msg, sizeof(log_msg),
+                     "audio overrun: dropped=%llu count=%llu",
+                     (unsigned long long)dropped,
+                     (unsigned long long)inst->overrun_count);
+            ap_log(log_msg);
+            inst->last_overrun_log_ms = now;
+        }
+#else
+        (void)log_msg;
+        (void)dropped;
+        (void)now;
+#endif
     }
 }
 
@@ -518,7 +641,41 @@ static void clear_ring(sconnect_instance_t *inst) {
     inst->write_abs = 0;
     inst->play_abs = 0;
     inst->pending_len = 0;
+    inst->last_out_l = 0;
+    inst->last_out_r = 0;
     memset(inst->pending_bytes, 0, sizeof(inst->pending_bytes));
+}
+
+static void update_last_output_samples(sconnect_instance_t *inst,
+                                       const int16_t *out,
+                                       size_t n) {
+    if (!inst || !out || n == 0) return;
+    if (n >= 2) {
+        inst->last_out_l = out[n - 2];
+        inst->last_out_r = out[n - 1];
+    } else {
+        inst->last_out_l = out[0];
+    }
+}
+
+static void fill_underrun_tail(sconnect_instance_t *inst,
+                               int16_t *out,
+                               size_t start,
+                               size_t total) {
+    size_t i;
+    size_t missing;
+    if (!inst || !out || start >= total) return;
+
+    missing = total - start;
+    for (i = 0; i < missing; i += 2) {
+        float scale = 1.0f - ((float)i / (float)missing);
+        float l = (float)inst->last_out_l * scale;
+        float r = (float)inst->last_out_r * scale;
+        out[start + i] = (int16_t)l;
+        if (start + i + 1 < total) {
+            out[start + i + 1] = (int16_t)r;
+        }
+    }
 }
 
 /* --- librespot supervisor --- */
@@ -636,9 +793,21 @@ static int supervisor_start(sconnect_instance_t *inst) {
 static int supervisor_restart(sconnect_instance_t *inst) {
     if (!inst) return -1;
     inst->pending_session_recover = false;
+    inst->pending_pause_flush = false;
+    inst->paused_since_ms = 0;
+    inst->pending_transition_prebuffer = false;
+    inst->transition_prebuffer_started_ms = 0;
     clear_ring(inst);
     clear_error(inst);
     inst->receiving_audio = false;
+    inst->underrun_count = 0;
+    inst->last_underrun_log_ms = 0;
+    inst->overrun_count = 0;
+    inst->last_overrun_log_ms = 0;
+    inst->render_gap_count = 0;
+    inst->last_render_ms = 0;
+    inst->last_render_gap_log_ms = 0;
+    inst->last_maintenance_ms = 0;
     supervisor_init_log_offset(inst);
     return supervisor_start(inst);
 }
@@ -681,6 +850,14 @@ static void supervisor_clear_credentials(sconnect_instance_t *inst) {
     inst->last_control_request_ms = 0;
     inst->control_backoff_until_ms = 0;
     inst->pending_session_recover = false;
+    inst->pending_pause_flush = false;
+    inst->paused_since_ms = 0;
+    inst->pending_transition_prebuffer = false;
+    inst->transition_prebuffer_started_ms = 0;
+    inst->render_gap_count = 0;
+    inst->last_render_ms = 0;
+    inst->last_render_gap_log_ms = 0;
+    inst->last_maintenance_ms = 0;
     set_controls_enabled(inst, false);
     set_supervisor_state(inst, "waiting_for_spotify");
 
@@ -997,6 +1174,18 @@ static void* v2_create_instance(const char *module_dir, const char *json_default
     inst->control_backoff_until_ms = 0;
     inst->last_session_recover_ms = 0;
     inst->pending_session_recover = false;
+    inst->pending_pause_flush = false;
+    inst->paused_since_ms = 0;
+    inst->pending_transition_prebuffer = false;
+    inst->transition_prebuffer_started_ms = 0;
+    inst->underrun_count = 0;
+    inst->last_underrun_log_ms = 0;
+    inst->overrun_count = 0;
+    inst->last_overrun_log_ms = 0;
+    inst->render_gap_count = 0;
+    inst->last_render_ms = 0;
+    inst->last_render_gap_log_ms = 0;
+    inst->last_maintenance_ms = 0;
     set_supervisor_state(inst, "uninitialized");
 
     (void)json_defaults;
@@ -1198,6 +1387,21 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
                         inst ? inst->bitrate_kbps : 320);
     }
 
+    if (strcmp(key, "underruns") == 0) {
+        return snprintf(buf, (size_t)buf_len, "%llu",
+                        (unsigned long long)(inst ? inst->underrun_count : 0ULL));
+    }
+
+    if (strcmp(key, "overruns") == 0) {
+        return snprintf(buf, (size_t)buf_len, "%llu",
+                        (unsigned long long)(inst ? inst->overrun_count : 0ULL));
+    }
+
+    if (strcmp(key, "render_gaps") == 0) {
+        return snprintf(buf, (size_t)buf_len, "%llu",
+                        (unsigned long long)(inst ? inst->render_gap_count : 0ULL));
+    }
+
     if (strcmp(key, "status") == 0) {
         if (!inst) return snprintf(buf, (size_t)buf_len, "error");
         if (inst->error_msg[0] != '\0') return snprintf(buf, (size_t)buf_len, "error");
@@ -1229,7 +1433,12 @@ static int v2_get_error(void *instance, char *buf, int buf_len) {
 
 static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int frames) {
     sconnect_instance_t *inst = (sconnect_instance_t *)instance;
+    char log_msg[192];
+    uint64_t render_now;
+    uint64_t render_delta;
+    bool do_maintenance;
     size_t needed;
+    size_t avail_before;
     size_t got;
     size_t i;
 
@@ -1240,22 +1449,83 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
 
     if (!inst) return;
 
-    check_daemon_alive(inst);
-    supervisor_poll_runtime_log(inst);
-    maybe_recover_session(inst);
-    supervisor_poll_nowplaying_state(inst);
+    render_now = now_ms();
+    if (inst->last_render_ms > 0 &&
+        render_now > inst->last_render_ms &&
+        inst->daemon_running) {
+        render_delta = render_now - inst->last_render_ms;
+        if (render_delta > RENDER_GAP_WARN_MS) {
+            inst->render_gap_count++;
+#if ENABLE_TELEMETRY_LOGS
+            if (inst->last_render_gap_log_ms == 0 ||
+                (render_now > inst->last_render_gap_log_ms &&
+                 (render_now - inst->last_render_gap_log_ms) >= 2000)) {
+                snprintf(log_msg, sizeof(log_msg),
+                         "render gap: delta=%llums count=%llu",
+                         (unsigned long long)render_delta,
+                         (unsigned long long)inst->render_gap_count);
+                ap_log(log_msg);
+                inst->last_render_gap_log_ms = render_now;
+            }
+#endif
+        }
+    }
+    inst->last_render_ms = render_now;
+    do_maintenance =
+        (inst->last_maintenance_ms == 0) ||
+        (render_now > inst->last_maintenance_ms &&
+         (render_now - inst->last_maintenance_ms) >= RENDER_MAINTENANCE_INTERVAL_MS);
+    if (do_maintenance) {
+        inst->last_maintenance_ms = render_now;
+        check_daemon_alive(inst);
+        supervisor_poll_runtime_log(inst);
+        maybe_recover_session(inst);
+        supervisor_poll_nowplaying_state(inst);
+        maybe_flush_paused(inst);
+    }
     pump_pipe(inst);
+    if (!maybe_release_transition_prebuffer(inst)) {
+        if (inst->daemon_running) {
+            out_interleaved_lr[needed - 1] |= 5;
+        }
+        return;
+    }
 
+    avail_before = ring_available(inst);
     got = ring_pop(inst, out_interleaved_lr, needed);
+    if (got < needed) {
+        fill_underrun_tail(inst, out_interleaved_lr, got, needed);
+        if (inst->daemon_running && inst->receiving_audio) {
+            uint64_t now = now_ms();
+            inst->underrun_count++;
+#if ENABLE_TELEMETRY_LOGS
+            if (inst->last_underrun_log_ms == 0 ||
+                (now > inst->last_underrun_log_ms &&
+                 (now - inst->last_underrun_log_ms) >= 2000)) {
+                snprintf(log_msg, sizeof(log_msg),
+                         "audio underrun: avail=%zu got=%zu need=%zu count=%llu",
+                         avail_before,
+                         got,
+                         needed,
+                         (unsigned long long)inst->underrun_count);
+                ap_log(log_msg);
+                inst->last_underrun_log_ms = now;
+            }
+#else
+            (void)now;
+#endif
+        }
+    }
 
-    if (inst->gain != 1.0f && got > 0) {
-        for (i = 0; i < got; i++) {
+    if (inst->gain != 1.0f && needed > 0) {
+        for (i = 0; i < needed; i++) {
             float s = out_interleaved_lr[i] * inst->gain;
             if (s > 32767.0f) s = 32767.0f;
             if (s < -32768.0f) s = -32768.0f;
             out_interleaved_lr[i] = (int16_t)s;
         }
     }
+    update_last_output_samples(inst, out_interleaved_lr, needed);
 
     /* Keep render loop alive while backend is active. */
     if (inst->daemon_running) {

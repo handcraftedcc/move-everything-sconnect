@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+plugin_file="$repo_root/src/dsp/sconnect_plugin.c"
+
+if ! rg -q 'render_gap_count' "$plugin_file"; then
+  echo "FAIL: plugin must track render_gap_count telemetry" >&2
+  exit 1
+fi
+
+if ! rg -q '#define ENABLE_TELEMETRY_LOGS 0' "$plugin_file"; then
+  echo "FAIL: telemetry logs must be disabled by default" >&2
+  exit 1
+fi
+
+if ! rg -q 'strcmp\(key, "render_gaps"\) == 0' "$plugin_file"; then
+  echo "FAIL: plugin must expose render_gaps param" >&2
+  exit 1
+fi
+
+echo "PASS: render gap telemetry counters are present and logs are disabled by default"
